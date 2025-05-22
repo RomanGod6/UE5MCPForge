@@ -25,6 +25,9 @@ blueprint_storage = {}
 # Configuration
 SYNC_INTERVAL = 60  # seconds between sync operations
 UE5_PLUGIN_URL = "http://localhost:8080"  # UE5 C++ plugin HTTP server URL
+DEFAULT_DETAIL_LEVEL = 2  # Default detail level for blueprint data (0=Basic, 1=Medium, 2=Full, 3=Graph, 4=Events, 5=References)
+MAX_NODES_PER_GRAPH = 50  # Maximum number of nodes to fetch per graph
+MAX_GRAPHS = 10  # Maximum number of graphs to fetch
 
 # Flag to control background sync
 sync_running = False
@@ -54,8 +57,8 @@ async def fetch_blueprints_from_http():
     
     logger.info(f"Fetching blueprints from UE5 plugin at {UE5_PLUGIN_URL}")
     
-    # Use requests to fetch the data
-    response = requests.get(f"{UE5_PLUGIN_URL}/blueprints/all", timeout=10)
+    # Use requests to fetch the data with detail level
+    response = requests.get(f"{UE5_PLUGIN_URL}/blueprints/all?detailLevel={DEFAULT_DETAIL_LEVEL}", timeout=10)
     
     if response.status_code != 200:
         logger.error(f"Failed to fetch blueprints: HTTP {response.status_code}")
@@ -82,7 +85,7 @@ async def fetch_blueprints_from_http():
                     blueprint_storage[blueprint["path"]] = blueprint
                     count += 1
                     
-            logger.info(f"Successfully loaded {count} blueprints from UE5 plugin HTTP server")
+            logger.info(f"Successfully loaded {count} blueprints from UE5 plugin HTTP server (detail level: {DEFAULT_DETAIL_LEVEL})")
             return True
         else:
             logger.warning("No blueprints found in UE5 plugin response")
@@ -289,9 +292,9 @@ def sync_blueprints_sync():
     global blueprint_storage
     logger.info(f"Performing synchronous fetch from UE5 plugin at {UE5_PLUGIN_URL}")
     
-    # Use requests to fetch the data
+    # Use requests to fetch the data with detail level
     try:
-        response = requests.get(f"{UE5_PLUGIN_URL}/blueprints/all", timeout=10)
+        response = requests.get(f"{UE5_PLUGIN_URL}/blueprints/all?detailLevel={DEFAULT_DETAIL_LEVEL}", timeout=10)
         
         if response.status_code != 200:
             logger.error(f"Failed to fetch blueprints: HTTP {response.status_code}")
@@ -317,7 +320,7 @@ def sync_blueprints_sync():
                     blueprint_storage[blueprint["path"]] = blueprint
                     count += 1
                     
-            logger.info(f"Successfully loaded {count} blueprints from UE5 plugin HTTP server")
+            logger.info(f"Successfully loaded {count} blueprints from UE5 plugin HTTP server (detail level: {DEFAULT_DETAIL_LEVEL})")
             return True
         else:
             logger.warning("No blueprints found in UE5 plugin response")
@@ -360,6 +363,178 @@ def set_sync_interval(seconds: int) -> str:
     
     SYNC_INTERVAL = seconds
     return f"Sync interval set to {seconds} seconds"
+
+@mcp.tool()
+def set_detail_level(level: int) -> str:
+    """
+    Set the detail level for blueprint data extraction
+    
+    0 = Basic (name, path, parent class only)
+    1 = Medium (basic + simplified functions and variables)
+    2 = Full (complete information without graph data)
+    3 = Graph (includes visual graph data)
+    4 = Events (focuses on event nodes and their graphs)
+    5 = References (includes blueprint references)
+    """
+    global DEFAULT_DETAIL_LEVEL
+    
+    if level < 0 or level > 5:
+        return "Error: Detail level must be between 0 and 5"
+    
+    DEFAULT_DETAIL_LEVEL = level
+    return f"Detail level set to {level} ({['Basic', 'Medium', 'Full', 'Graph', 'Events', 'References'][level]})"
+
+@mcp.tool()
+def get_blueprint_with_detail(blueprint_path: str, detail_level: int = None) -> str:
+    """
+    Get a blueprint with a specific detail level
+    
+    blueprint_path: Path to the blueprint
+    detail_level: Detail level (0-5, see set_detail_level documentation)
+    """
+    if detail_level is None:
+        detail_level = DEFAULT_DETAIL_LEVEL
+        
+    if detail_level < 0 or detail_level > 5:
+        return "Error: Detail level must be between 0 and 5"
+    
+    try:
+        # Fetch the blueprint with the specified detail level
+        response = requests.get(
+            f"{UE5_PLUGIN_URL}/blueprints/path?path={blueprint_path}&detailLevel={detail_level}",
+            timeout=10
+        )
+        
+        if response.status_code != 200:
+            return f"Error: Failed to fetch blueprint (HTTP {response.status_code})"
+            
+        blueprint = response.json()
+        
+        # Update storage with this detailed blueprint
+        if "path" in blueprint:
+            blueprint_storage[blueprint["path"]] = blueprint
+            
+        return json.dumps(blueprint, indent=2)
+    except Exception as e:
+        return f"Error fetching blueprint: {str(e)}"
+
+@mcp.tool()
+def list_blueprint_events(blueprint_path: str) -> str:
+    """
+    List all event nodes in a specific blueprint
+    
+    blueprint_path: Path to the blueprint
+    """
+    try:
+        # Fetch events for the blueprint
+        response = requests.get(
+            f"{UE5_PLUGIN_URL}/blueprints/events?path={blueprint_path}",
+            timeout=10
+        )
+        
+        if response.status_code != 200:
+            return f"Error: Failed to fetch blueprint events (HTTP {response.status_code})"
+            
+        events = response.json()
+        return json.dumps(events, indent=2)
+    except Exception as e:
+        return f"Error fetching blueprint events: {str(e)}"
+
+@mcp.tool()
+def get_event_graph(blueprint_path: str, event_name: str, max_nodes: int = None) -> str:
+    """
+    Get a specific event graph from a blueprint
+    
+    blueprint_path: Path to the blueprint
+    event_name: Name of the event (e.g., BeginPlay, Tick)
+    max_nodes: Maximum number of nodes to include (default: 50)
+    """
+    if max_nodes is None:
+        max_nodes = MAX_NODES_PER_GRAPH
+        
+    try:
+        # Fetch the event graph
+        response = requests.get(
+            f"{UE5_PLUGIN_URL}/blueprints/event-graph?path={blueprint_path}&eventName={event_name}&maxNodes={max_nodes}",
+            timeout=10
+        )
+        
+        if response.status_code != 200:
+            return f"Error: Failed to fetch event graph (HTTP {response.status_code})"
+            
+        graph = response.json()
+        return json.dumps(graph, indent=2)
+    except Exception as e:
+        return f"Error fetching event graph: {str(e)}"
+
+@mcp.tool()
+def get_function_graph(blueprint_path: str, function_name: str) -> str:
+    """
+    Get a specific function graph from a blueprint
+    
+    blueprint_path: Path to the blueprint
+    function_name: Name of the function
+    """
+    try:
+        # Fetch the function graph
+        response = requests.get(
+            f"{UE5_PLUGIN_URL}/blueprints/function?path={blueprint_path}&function={function_name}",
+            timeout=10
+        )
+        
+        if response.status_code != 200:
+            return f"Error: Failed to fetch function graph (HTTP {response.status_code})"
+            
+        graph = response.json()
+        return json.dumps(graph, indent=2)
+    except Exception as e:
+        return f"Error fetching function graph: {str(e)}"
+
+@mcp.tool()
+def get_nodes_by_type(blueprint_path: str, node_type: str) -> str:
+    """
+    Get all nodes of a specific type from a blueprint
+    
+    blueprint_path: Path to the blueprint
+    node_type: Type of node to find (e.g., K2Node_CallFunction, K2Node_IfThenElse)
+    """
+    try:
+        # Fetch nodes of the specified type
+        response = requests.get(
+            f"{UE5_PLUGIN_URL}/blueprints/graph/nodes?path={blueprint_path}&nodeType={node_type}",
+            timeout=10
+        )
+        
+        if response.status_code != 200:
+            return f"Error: Failed to fetch nodes (HTTP {response.status_code})"
+            
+        nodes = response.json()
+        return json.dumps(nodes, indent=2)
+    except Exception as e:
+        return f"Error fetching nodes: {str(e)}"
+
+@mcp.tool()
+def get_blueprint_references(blueprint_path: str, include_indirect: bool = False) -> str:
+    """
+    Get references to and from a blueprint
+    
+    blueprint_path: Path to the blueprint
+    include_indirect: Whether to include indirect references
+    """
+    try:
+        # Fetch blueprint references
+        response = requests.get(
+            f"{UE5_PLUGIN_URL}/blueprints/references?path={blueprint_path}&includeIndirect={str(include_indirect).lower()}",
+            timeout=10
+        )
+        
+        if response.status_code != 200:
+            return f"Error: Failed to fetch blueprint references (HTTP {response.status_code})"
+            
+        references = response.json()
+        return json.dumps(references, indent=2)
+    except Exception as e:
+        return f"Error fetching blueprint references: {str(e)}"
 
 # ========== RESOURCES ==========
 
@@ -408,6 +583,94 @@ def get_blueprint_variables(path: str) -> str:
     variables = blueprint_storage[path].get("variables", [])
     return json.dumps(variables, indent=2)
 
+# ========== RESOURCES ==========
+
+@mcp.resource("blueprint://{path}/events")
+def get_blueprint_events(path: str) -> str:
+    """Get all event nodes from a specific blueprint"""
+    if path not in blueprint_storage:
+        return json.dumps({"error": f"Blueprint with path '{path}' not found"})
+
+    # Try to get events from the blueprint
+    try:
+        # First check if we already have the blueprint with sufficient detail level
+        blueprint = blueprint_storage[path]
+        
+        # If we don't have functions or the detail level is too low, fetch with higher detail
+        if "functions" not in blueprint or not blueprint.get("functions"):
+            # Fetch the blueprint with events detail level
+            response = requests.get(
+                f"{UE5_PLUGIN_URL}/blueprints/events?path={path}",
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                return response.text
+            else:
+                # Fall back to extracting events from existing data
+                pass
+        
+        # Extract events from functions
+        events = []
+        for function in blueprint.get("functions", []):
+            if function.get("isEvent", False):
+                events.append(function)
+                
+        return json.dumps(events, indent=2)
+    except Exception as e:
+        return json.dumps({"error": f"Error getting events: {str(e)}"})
+
+@mcp.resource("blueprint://{path}/references")
+def get_blueprint_references_resource(path: str) -> str:
+    """Get references to and from a specific blueprint"""
+    if path not in blueprint_storage:
+        return json.dumps({"error": f"Blueprint with path '{path}' not found"})
+
+    try:
+        # Fetch blueprint references
+        response = requests.get(
+            f"{UE5_PLUGIN_URL}/blueprints/references?path={path}",
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            return response.text
+        else:
+            return json.dumps({"error": f"Failed to fetch blueprint references (HTTP {response.status_code})"})
+    except Exception as e:
+        return json.dumps({"error": f"Error fetching blueprint references: {str(e)}"})
+
+@mcp.resource("blueprint://{path}/graphs")
+def get_blueprint_graphs(path: str) -> str:
+    """Get all graphs from a specific blueprint"""
+    if path not in blueprint_storage:
+        return json.dumps({"error": f"Blueprint with path '{path}' not found"})
+
+    # Check if we have graph data
+    blueprint = blueprint_storage[path]
+    if "graphs" in blueprint and blueprint["graphs"]:
+        return json.dumps(blueprint["graphs"], indent=2)
+    else:
+        # Try to fetch with graph detail level
+        try:
+            response = requests.get(
+                f"{UE5_PLUGIN_URL}/blueprints/path?path={path}&detailLevel=3&maxGraphs={MAX_GRAPHS}&maxNodes={MAX_NODES_PER_GRAPH}",
+                timeout=15
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "graphs" in data:
+                    # Update storage with this detailed blueprint
+                    blueprint_storage[path] = data
+                    return json.dumps(data["graphs"], indent=2)
+                else:
+                    return json.dumps({"error": "No graph data available in response"})
+            else:
+                return json.dumps({"error": f"Failed to fetch blueprint graphs (HTTP {response.status_code})"})
+        except Exception as e:
+            return json.dumps({"error": f"Error fetching blueprint graphs: {str(e)}"})
+
 # ========== PROMPTS ==========
 
 @mcp.prompt()
@@ -423,11 +686,14 @@ def analyze_blueprint(blueprint_path: str) -> str:
     2. Its structure and complexity (using analyze_blueprint_complexity)
     3. Key functions and their purposes
     4. Important variables and their roles
+    5. Event handling patterns (using list_blueprint_events)
+    6. References to and from this blueprint (using get_blueprint_references)
 
     Finally, provide:
     - A summary of what this blueprint does in the game
     - Potential optimization suggestions
     - Any patterns or anti-patterns observed
+    - Recommendations for improving the blueprint's structure or functionality
     """
 
 @mcp.prompt()
@@ -454,12 +720,16 @@ def blueprint_architecture_review() -> str:
     2. Identify common parent classes and categorize blueprints
     3. Find the most complex blueprints using analyze_blueprint_complexity
     4. Look for patterns in naming conventions and structure
+    5. Analyze blueprint references to understand dependencies
+    6. Examine event usage patterns across blueprints
 
     Then provide:
     - A summary of the overall architecture
     - Hierarchy diagrams of blueprint inheritance
+    - Dependency graphs showing blueprint relationships
     - Recommendations for better organization
     - Potential refactoring opportunities
+    - Performance optimization suggestions
     """
 
 @mcp.prompt()
@@ -473,11 +743,181 @@ def find_blueprint_references(function_name: str) -> str:
        - How the function is used within each blueprint
        - Whether it's an event or regular function
        - What parameters it takes and returns
+    3. For key blueprints, use get_function_graph to visualize the implementation
+    4. Use get_blueprint_references to find other blueprints that might call this function
 
     Then provide:
     - A list of all blueprints containing this function
     - An analysis of how the function is used across different blueprints
+    - Visualization of common implementation patterns
     - Suggestions for standardizing or improving its implementation
+    - Potential performance optimizations
+    """
+
+@mcp.prompt()
+def identify_blueprint_patterns(pattern_type: str = "all") -> str:
+    """Identify common patterns or anti-patterns across blueprints"""
+    pattern_types = {
+        "all": "all patterns",
+        "performance": "performance-related patterns",
+        "structure": "structural patterns",
+        "events": "event handling patterns",
+        "replication": "network replication patterns"
+    }
+    
+    pattern_name = pattern_types.get(pattern_type, "all patterns")
+    
+    return f"""
+    Let's identify {pattern_name} across the project's blueprints:
+
+    1. First, list all blueprints using list_blueprints()
+    2. For a representative sample of blueprints:
+       - Get detailed blueprint data with get_blueprint_with_detail
+       - Analyze their structure, functions, and variables
+       - Look for common patterns and anti-patterns
+
+    For performance patterns, focus on:
+    - Expensive operations in Tick events
+    - Redundant calculations
+    - Inefficient loops or array operations
+    - Heavy operations on BeginPlay
+
+    For structural patterns, focus on:
+    - Inheritance hierarchies
+    - Component composition
+    - Function organization
+    - Variable organization
+
+    For event patterns, focus on:
+    - Event binding and delegation
+    - Event-driven architecture
+    - Custom event usage
+    - Event replication
+
+    Then provide:
+    - A catalog of common patterns found
+    - Examples of each pattern with blueprint paths
+    - Recommendations for best practices
+    - Anti-patterns to avoid with alternatives
+    - Suggestions for improving the overall blueprint architecture
+    """
+
+@mcp.prompt()
+def optimize_blueprint(blueprint_path: str) -> str:
+    """Provide optimization suggestions for a specific blueprint"""
+    return f"""
+    Let's analyze blueprint '{blueprint_path}' for optimization opportunities:
+
+    1. First, get the blueprint with graph data using get_blueprint_with_detail('{blueprint_path}', 3)
+    2. Analyze its event graphs, particularly Tick and BeginPlay
+    3. Look for performance issues like:
+       - Expensive operations in Tick
+       - Redundant calculations
+       - Inefficient loops or array operations
+       - Excessive event dispatching
+       - Complex constructions in BeginPlay
+    4. Examine variable usage and potential for caching
+    5. Check for proper use of timers vs polling
+
+    Then provide:
+    - A summary of current performance bottlenecks
+    - Specific optimization recommendations with examples
+    - Suggestions for refactoring problematic sections
+    - Alternative approaches that would be more efficient
+    - Estimated performance impact of each suggestion
+    """
+
+@mcp.prompt()
+def compare_blueprints(blueprint_path1: str, blueprint_path2: str) -> str:
+    """Compare two blueprints to identify similarities and differences"""
+    return f"""
+    Let's compare blueprints '{blueprint_path1}' and '{blueprint_path2}':
+
+    1. First, get detailed information about both blueprints:
+       - get_blueprint_with_detail('{blueprint_path1}', 2)
+       - get_blueprint_with_detail('{blueprint_path2}', 2)
+    
+    2. Compare their structure:
+       - Parent classes and inheritance
+       - Functions and their implementations
+       - Variables and their types
+       - Event handling approaches
+    
+    3. Analyze similarities and differences in:
+       - Overall purpose and functionality
+       - Implementation approaches
+       - Coding patterns used
+       - Potential reuse opportunities
+
+    Then provide:
+    - A side-by-side comparison of key features
+    - Analysis of common functionality that could be refactored
+    - Identification of unique aspects of each blueprint
+    - Recommendations for standardizing similar functionality
+    - Suggestions for potential base classes or interfaces
+    """
+
+@mcp.prompt()
+def analyze_event_flow(blueprint_path: str, event_name: str) -> str:
+    """Analyze the execution flow of a specific event in a blueprint"""
+    return f"""
+    Let's analyze the execution flow of the '{event_name}' event in blueprint '{blueprint_path}':
+
+    1. First, get the event graph using get_event_graph('{blueprint_path}', '{event_name}')
+    2. Identify the entry point and execution paths
+    3. Analyze key decision points and branches
+    4. Examine function calls and their purposes
+    5. Look for potential race conditions or performance bottlenecks
+
+    Then provide:
+    - A description of what this event does
+    - A step-by-step breakdown of the execution flow
+    - Visualization of the execution paths (as text/ASCII diagrams)
+    - Potential optimization opportunities
+    - Any error handling or edge cases that might be missing
+    """
+
+@mcp.prompt()
+def analyze_blueprint_references(blueprint_path: str) -> str:
+    """Analyze references to and from a blueprint to understand dependencies"""
+    return f"""
+    Let's analyze the references for blueprint '{blueprint_path}' to understand its dependencies:
+
+    1. First, get the blueprint references using get_blueprint_references('{blueprint_path}', True)
+    2. Identify incoming references (other blueprints that use this one)
+    3. Identify outgoing references (blueprints that this one uses)
+    4. Analyze the types of references (inheritance, function calls, variables, etc.)
+    5. Look for potential circular dependencies
+
+    Then provide:
+    - A summary of how this blueprint is used in the project
+    - A summary of what other blueprints this one depends on
+    - Visualization of the dependency relationships
+    - Recommendations for reducing tight coupling
+    - Potential refactoring opportunities to improve the architecture
+    """
+
+@mcp.prompt()
+def analyze_blueprint_graph_patterns(blueprint_path: str) -> str:
+    """Analyze patterns in blueprint graphs to identify common structures and anti-patterns"""
+    return f"""
+    Let's analyze the graph patterns in blueprint '{blueprint_path}':
+
+    1. First, get the blueprint with graph data using get_blueprint_with_detail('{blueprint_path}', 3)
+    2. Identify common node patterns (sequences, branches, loops)
+    3. Look for anti-patterns like:
+       - Spaghetti connections
+       - Deeply nested branches
+       - Redundant calculations
+       - Excessive event usage
+    4. Analyze function usage and potential for refactoring
+
+    Then provide:
+    - A summary of the graph structure
+    - Identification of common patterns used
+    - List of potential anti-patterns found
+    - Recommendations for improving the blueprint's structure
+    - Suggestions for performance optimization
     """
 
 if __name__ == "__main__":
@@ -493,7 +933,7 @@ if __name__ == "__main__":
     
     # Check for UE5 plugin HTTP server
     try:
-        response = requests.get(f"{UE5_PLUGIN_URL}/blueprints/all", timeout=2)
+        response = requests.get(f"{UE5_PLUGIN_URL}/blueprints/all?detailLevel=0", timeout=2)
         if response.status_code == 200:
             logger.info(f"Successfully connected to UE5 plugin HTTP server at {UE5_PLUGIN_URL}")
             # Process blueprints from HTTP server
@@ -544,6 +984,19 @@ if __name__ == "__main__":
         print("- force_blueprint_sync: Manually fetch blueprints from UE5 plugin HTTP server")
         print("- list_blueprints: Show all currently loaded blueprints")
         print("- search_blueprints: Search for blueprints by various criteria")
+        print("- set_detail_level: Set the detail level for blueprint data (0-5)")
+        print("- get_blueprint_with_detail: Get a blueprint with specific detail level")
+        print("- list_blueprint_events: List all event nodes in a blueprint")
+        print("- get_event_graph: Get a specific event graph from a blueprint")
+        print("- get_function_graph: Get a specific function graph from a blueprint")
+        print("- get_nodes_by_type: Get all nodes of a specific type from a blueprint")
+        print("- get_blueprint_references: Get references to and from a blueprint")
         print("Available resources:")
         print("- blueprints://all: Access all loaded blueprints")
+        print("- blueprint://{path}: Get detailed information about a specific blueprint")
+        print("- blueprint://{path}/functions: Get all functions from a specific blueprint")
+        print("- blueprint://{path}/variables: Get all variables from a specific blueprint")
+        print("- blueprint://{path}/events: Get all event nodes from a specific blueprint")
+        print("- blueprint://{path}/references: Get references to and from a specific blueprint")
+        print("- blueprint://{path}/graphs: Get all graphs from a specific blueprint")
         mcp.run(transport="streamable-http", port=3000)

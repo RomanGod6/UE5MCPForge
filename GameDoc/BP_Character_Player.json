@@ -1,0 +1,12 @@
+{
+    "blueprints": [
+        {
+            "name": "BP_Character_Player",
+            "path": "/Game/EasySurvivalRPG/Blueprints/Characters/Base/BP_Character_Player.BP_Character_Player",
+            "parentClass": "BP_Character_Base_C",
+            "functions": [],
+            "variables": [],
+            "description": "Character Blueprint that contains movement logic."
+        }
+    ]
+}
